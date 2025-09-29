@@ -1,11 +1,5 @@
-# Archivo: .github/workflows/deploy.yml
-
 name: Deploy to VPS
-run: |
-    mkdir -p ~/.ssh
-    echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
-    chmod 600 ~/.ssh/id_rsa
-    ssh-keyscan ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
 # Esto le dice a GitHub que ejecute este flujo cada vez que hagas 'push' a la rama 'main'
 on:
   push:
@@ -23,7 +17,7 @@ jobs:
         username: ${{ secrets.VPS_USERNAME }}
         key: ${{ secrets.SSH_PRIVATE_KEY }}
         script: |
-          # Navega a la carpeta de tu proyecto en el VPS (cámbiala si es necesario)
+          # Navega a la carpeta de tu proyecto en el VPS
           cd /opt/BOT
           
           # Descarga el código más reciente desde GitHub
@@ -33,7 +27,6 @@ jobs:
           docker build -t whatsapp-bot .
           
           # Detiene y elimina el contenedor antiguo si existe
-          # (El '|| true' evita que falle si el contenedor no existe la primera vez)
           docker stop bot-wa || true
           docker rm bot-wa || true
           
