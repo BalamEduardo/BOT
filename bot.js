@@ -18,6 +18,20 @@ const conversationState = {};
 const db = new Database('sesiones.db');
 console.log('Conexión a la base de datos SQLite exitosa.');
 
+// --- INICIALIZACIÓN DE LA TABLA (NUEVO) ---
+// Este bloque de código se asegura de que la tabla 'sesiones' exista.
+const crearTabla = `
+  CREATE TABLE IF NOT EXISTS sesiones (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telefono TEXT UNIQUE NOT NULL,
+    token TEXT NOT NULL,
+    fecha_creacion DATETIME NOT NULL
+  );
+`;
+db.exec(crearTabla);
+console.log('Tabla de sesiones asegurada.');
+// -----
+
 // --- FUNCIONES DEL BOT ---
 
 function obtenerSesion(telefono) {
