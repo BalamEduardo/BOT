@@ -1,7 +1,11 @@
 # Archivo: .github/workflows/deploy.yml
 
 name: Deploy to VPS
-
+run: |
+    mkdir -p ~/.ssh
+    echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
+    chmod 600 ~/.ssh/id_rsa
+    ssh-keyscan ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
 # Esto le dice a GitHub que ejecute este flujo cada vez que hagas 'push' a la rama 'main'
 on:
   push:
