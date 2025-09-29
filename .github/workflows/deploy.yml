@@ -31,4 +31,4 @@ jobs:
           docker rm bot-wa || true
           
           # Ejecuta el nuevo contenedor
-          docker run -d --restart always --name bot-wa -p 3000:3000 whatsapp-bot
+          docker run -d --restart always --name bot-wa -p 3000:3000 -v /opt/BOT/sesiones.db:/usr/src/app/sesiones.db whatsapp-bot
