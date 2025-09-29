@@ -1,0 +1,37 @@
+# Archivo: .github/workflows/deploy.yml
+
+name: Deploy to VPS
+
+# Esto le dice a GitHub que ejecute este flujo cada vez que hagas 'push' a la rama 'main'
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest # El tipo de máquina virtual que usará GitHub
+
+    steps:
+    - name: 🚚 Deploy to VPS via SSH
+      uses: appleboy/ssh-action@master # Usamos una acción pre-hecha para facilitar el SSH
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USERNAME }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          # Navega a la carpeta de tu proyecto en el VPS (cámbiala si es necesario)
+          cd /opt/BOT
+          
+          # Descarga el código más reciente desde GitHub
+          git pull
+          
+          # Reconstruye la imagen de Docker
+          docker build -t whatsapp-bot .
+          
+          # Detiene y elimina el contenedor antiguo si existe
+          # (El '|| true' evita que falle si el contenedor no existe la primera vez)
+          docker stop bot-wa || true
+          docker rm bot-wa || true
+          
+          # Ejecuta el nuevo contenedor
+          docker run -d --restart always --name bot-wa -p 3000:3000 whatsapp-bot
