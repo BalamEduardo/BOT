@@ -9,7 +9,8 @@ const PORT = 3000;
 const EVO_API_URL = 'http://10.8.0.20:8080';
 const EVO_API_KEY = '0875B0E3588B-46EE-AE53-0B71EABCC509';
 const MALENA_API_URL = 'https://panel.malena.cloud/api/login-pin';
-const INSTANCE_NAME = 'BOT'; // Usamos la instancia correcta 'BOT'
+const MALENA_REBOOT_API_URL = 'https://panel.malena.cloud/api/host/reboot'; // --- NUEVO --- URL para el reinicio
+const INSTANCE_NAME = 'BOT';
 
 const app = express();
 app.use(express.json());
@@ -18,8 +19,7 @@ const conversationState = {};
 const db = new Database('sesiones.db');
 console.log('Conexión a la base de datos SQLite exitosa.');
 
-// --- INICIALIZACIÓN DE LA TABLA (NUEVO) ---
-// Este bloque de código se asegura de que la tabla 'sesiones' exista.
+// --- INICIALIZACIÓN DE LA TABLA ---
 const crearTabla = `
   CREATE TABLE IF NOT EXISTS sesiones (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,7 +30,6 @@ const crearTabla = `
 `;
 db.exec(crearTabla);
 console.log('Tabla de sesiones asegurada.');
-// -----
 
 // --- FUNCIONES DEL BOT ---
 
@@ -46,11 +45,6 @@ function esTokenVigente(fechaCreacion) {
   return (ahora - fechaToken) < veinticuatroHorasEnMs;
 }
 
-/**
- * Guarda o actualiza una sesión en la base de datos.
- * @param {string} telefono El número de teléfono.
- * @param {string} token El nuevo token.
- */
 function guardarSesion(telefono, token) {
   console.log(`Guardando/actualizando sesión para ${telefono}`);
   const ahora = new Date().toISOString();
@@ -73,7 +67,51 @@ async function enviarMensaje(telefono, texto) {
   }
 }
 
-// --- ENDPOINT DEL WEBHOOK (CORREGIDO) ---
+// --- NUEVO --- Función para procesar comandos
+async function procesarComando(telefono, token, mensaje) {
+  // Extraemos el comando y los argumentos. Ej: "!reiniciar host1" -> comando="!reiniciar", args=["host1"]
+  const [comando, ...args] = mensaje.trim().split(/\s+/);
+
+  switch (comando.toLowerCase()) {
+    case '!reiniciar':
+      const host = args[0];
+      if (!host) {
+        await enviarMensaje(telefono, '❌ Por favor, especifica el nombre del equipo. Ejemplo: `!reiniciar AD_Hab115`');
+        return;
+      }
+
+      await enviarMensaje(telefono, `⏳ Procesando orden de reinicio para *${host}*... Un momento.`);
+
+      try {
+        const response = await axios.post(MALENA_REBOOT_API_URL, {
+          hostname: host
+        }, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (response.data && response.data.success) {
+          const mensajeExito = response.data.message || 'El equipo se reinició correctamente.';
+          await enviarMensaje(telefono, `✅ ¡Éxito! ${mensajeExito}`);
+        } else {
+          const mensajeFallo = response.data.message || 'La API reportó un error desconocido.';
+          await enviarMensaje(telefono, `🔴 Error al procesar el reinicio: ${mensajeFallo}`);
+        }
+      } catch (error) {
+        console.error('Error al llamar a la API de Malena:', error.response ? error.response.data : error.message);
+        await enviarMensaje(telefono, '🔴 Hubo un error de comunicación al intentar reiniciar el equipo. Por favor, contacta a un administrador.');
+      }
+      break;
+
+    default:
+      await enviarMensaje(telefono, 'Comando no reconocido. Por ahora, solo puedes usar `!reiniciar <hostname>`.');
+      break;
+  }
+}
+
+// --- ENDPOINT DEL WEBHOOK ---
 
 app.post('/webhook', async (req, res) => {
   console.log('---------- ¡Webhook Recibido! ----------');
@@ -84,7 +122,6 @@ app.post('/webhook', async (req, res) => {
     const mensaje = webhookData.message.conversation;
     console.log(`Mensaje recibido de: ${telefono}, Contenido: ${mensaje}`);
     
-    // 1. ¿El bot está esperando el PIN de este usuario?
     if (conversationState[telefono]?.estado === 'AWAITING_PIN') {
       const pinRecibido = mensaje;
       console.log(`PIN recibido: ${pinRecibido}. Validando...`);
@@ -92,30 +129,22 @@ app.post('/webhook', async (req, res) => {
       try {
         const response = await axios.post(MALENA_API_URL, { pin: pinRecibido });
         const nuevoToken = response.data.token;
-
         guardarSesion(telefono, nuevoToken);
         await enviarMensaje(telefono, '✅ ¡Autenticación exitosa! Tu sesión durará 24 horas. Ahora puedes enviar tu comando.');
-        
-        // --- CORRECCIÓN AQUÍ ---
-        // Solo borramos el estado si el PIN fue correcto.
         delete conversationState[telefono]; 
-        
       } catch (error) {
         console.error('Error al validar el PIN:', error.response?.data);
         await enviarMensaje(telefono, '❌ PIN incorrecto. Por favor, inténtalo de nuevo.');
-        // Ya no borramos el estado aquí, para que el bot siga esperando el PIN correcto.
       }
       
     } else {
-      // 2. Si no, procesamos el comando
       const sesionUsuario = obtenerSesion(telefono);
-
       if (sesionUsuario && esTokenVigente(sesionUsuario.fecha_creacion)) {
         console.log('✅ Token vigente. Procesando comando...');
-        await enviarMensaje(telefono, `Comando "${mensaje}" recibido. (Lógica de reinicio pendiente).`);
+        // --- MODIFICADO --- Llamamos a la nueva función en lugar de enviar un mensaje placeholder.
+        await procesarComando(telefono, sesionUsuario.token, mensaje);
       
       } else {
-        // 3. Si no hay sesión o el token expiró, pedimos el PIN
         if (sesionUsuario) console.log('❌ Token caducado.');
         else console.log('No se encontró sesión.');
         
