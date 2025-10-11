@@ -80,9 +80,12 @@ async function procesarComando(telefono, token, mensaje) {
         return;
       }
 
-      await enviarMensaje(telefono, `⏳ Procesando orden de reinicio para *${host}*... Un momento.`);
+      await enviarMensaje(telefono, `⏳ Procesando orden de reinicio para *${host}*... (MODO DE PRUEBA)`);
 
       try {
+        // --- INICIO DE LA SIMULACIÓN ---
+        // 1. Comentamos la llamada real a la API para que no se ejecute
+        /*
         const response = await axios.post(MALENA_REBOOT_API_URL, {
           hostname: host
         }, {
@@ -91,7 +94,15 @@ async function procesarComando(telefono, token, mensaje) {
             'Content-Type': 'application/json'
           }
         });
+        */
 
+        // 2. Creamos una respuesta falsa, como si la API nos hubiera contestado con éxito
+        const response = {
+          data: {
+            success: true,
+            message: "Host reiniciado correctamente (simulación)."
+          }
+        };
         if (response.data && response.data.success) {
           const mensajeExito = response.data.message || 'El equipo se reinició correctamente.';
           await enviarMensaje(telefono, `✅ ¡Éxito! ${mensajeExito}`);
