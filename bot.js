@@ -41,7 +41,7 @@ function obtenerSesion(telefono) {
 function esTokenVigente(fechaCreacion) {
   const ahora = new Date();
   const fechaToken = new Date(fechaCreacion);
-  const veinticuatroHorasEnMs = 12000;
+  const veinticuatroHorasEnMs = 86400000;
   return (ahora - fechaToken) < veinticuatroHorasEnMs;
 }
 
