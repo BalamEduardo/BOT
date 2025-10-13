@@ -1,5 +1,6 @@
 // Archivo: bot.js
-
+const stringSimilarity = require('string-similarity');
+const COMANDOS_VALIDOS = ['!reiniciar'];
 const express = require('express');
 const Database = require('better-sqlite3');
 const axios = require('axios');
@@ -9,7 +10,7 @@ const PORT = 3000;
 const EVO_API_URL = 'http://10.8.0.20:8080';
 const EVO_API_KEY = '0875B0E3588B-46EE-AE53-0B71EABCC509';
 const MALENA_API_URL = 'https://panel.malena.cloud/api/login-pin';
-const MALENA_REBOOT_API_URL = 'https://panel.malena.cloud/api/host/reboot'; // --- NUEVO --- URL para el reinicio
+const MALENA_REBOOT_API_URL = 'https://panel.malena.cloud/api/host/reboot'; 
 const INSTANCE_NAME = 'BOT';
 
 const app = express();
@@ -69,7 +70,6 @@ async function enviarMensaje(telefono, texto) {
 
 // --- NUEVO --- Función para procesar comandos
 async function procesarComando(telefono, token, mensaje) {
-  // Extraemos el comando y los argumentos. Ej: "!reiniciar host1" -> comando="!reiniciar", args=["host1"]
   const [comando, ...args] = mensaje.trim().split(/\s+/);
 
   switch (comando.toLowerCase()) {
@@ -80,10 +80,10 @@ async function procesarComando(telefono, token, mensaje) {
         return;
       }
 
-      await enviarMensaje(telefono, `⏳ Procesando orden de reinicio para *${host}*... (MODO DE PRUEBA)`);
+      // --- CORRECCIÓN AQUÍ --- Se elimina el texto "(MODO DE PRUEBA)"
+      await enviarMensaje(telefono, `⏳ Procesando orden de reinicio para *${host}*... Un momento.`);
 
       try {
-        
         const response = await axios.post(MALENA_REBOOT_API_URL, {
           hostname: host
         }, {
@@ -107,7 +107,14 @@ async function procesarComando(telefono, token, mensaje) {
       break;
 
     default:
-      await enviarMensaje(telefono, 'Comando no reconocido. Por ahora, solo puedes usar `!reiniciar <hostname>`.');
+      // --- MEJORA AÑADIDA --- Sugerencia de comandos
+      const { bestMatch } = stringSimilarity.findBestMatch(comando.toLowerCase(), COMANDOS_VALIDOS);
+
+      if (bestMatch.rating > 0.7) {
+        await enviarMensaje(telefono, `Comando no reconocido. ¿Quizás quisiste decir \`${bestMatch.target}\`?`);
+      } else {
+        await enviarMensaje(telefono, 'Comando no reconocido. Por ahora, solo puedes usar `!reiniciar <hostname>`.');
+      }
       break;
   }
 }
