@@ -4,7 +4,7 @@ const COMANDOS_VALIDOS = ['!reiniciar'];
 const express = require('express');
 const Database = require('better-sqlite3');
 const axios = require('axios');
-
+//cambio
 // --- CONFIGURACIÓN ---
 const PORT = 3000;
 const EVO_API_URL = 'http://10.8.0.20:8080';
