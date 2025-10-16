@@ -8,7 +8,7 @@ const axios = require('axios');
 // --- CONFIGURACIÓN ---
 const PORT = 3000;
 const EVO_API_URL = 'http://10.8.0.20:8080';
-const EVO_API_KEY = '0875B0E3588B-46EE-AE53-0B71EABCC509';
+const EVO_API_KEY = '429683C4C977415CAAFCCE10F7D57E11';
 const MALENA_API_URL = 'https://panel.malena.cloud/api/login-pin';
 const MALENA_REBOOT_API_URL = 'https://panel.malena.cloud/api/host/reboot'; 
 const INSTANCE_NAME = 'BOT';
