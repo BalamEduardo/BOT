@@ -13,7 +13,7 @@ const MALENA_API_URL = 'https://panel.malena.cloud/api/login-pin';
 const MALENA_REBOOT_API_URL = 'https://panel.malena.cloud/api/host/reboot';
 const INSTANCE_NAME = 'BOT';
 
-// --- NUEVO --- Constantes de tiempo diferenciadas
+// --- Constantes de tiempo diferenciadas ---
 const MINUTOS_INACTIVIDAD = 5; // Para AWAITING_PIN
 const MINUTOS_BLOQUEO = 3;     // Para RATE_LIMITED (Demasiados Intentos)
 
@@ -40,7 +40,6 @@ db.exec(crearTabla);
 console.log('Tabla de sesiones asegurada.');
 
 // --- FUNCIONES DEL BOT ---
-// (Estas funciones no han cambiado: obtenerSesion, esTokenVigente, guardarSesion, borrarSesion, enviarMensaje, procesarComando)
 function obtenerSesion(telefono) {
   const query = db.prepare('SELECT * FROM sesiones WHERE telefono = ?');
   return query.get(telefono);
@@ -155,13 +154,11 @@ app.post('/webhook', async (req, res) => {
     
     let estadoUsuario = conversationState[telefono];
 
-    // --- MODIFICADO --- Chequeo de estado RATE_LIMITED
-    // Ahora responde al usuario en lugar de ignorarlo.
+    // Chequeo de estado RATE_LIMITED
     if (estadoUsuario && estadoUsuario.estado === 'RATE_LIMITED') {
         console.log(`Usuario ${telefono} está en rate-limit. Recordando espera de ${MINUTOS_BLOQUEO} min.`);
-        // Envía un recordatorio activo
         await enviarMensaje(telefono, `Por favor, espere. Aún debe esperar ${MINUTOS_BLOQUEO} minutos para volver a intentarlo.`);
-        return; // Importante: no procesamos nada más.
+        return;
     }
     
     // Lógica de procesamiento de mensaje
@@ -191,7 +188,6 @@ app.post('/webhook', async (req, res) => {
       } catch (error) {
         console.error('Error al validar el PIN:', error.response?.data);
         
-        // Lógica del Rate Limit a 3 minutos
         if (error.response && error.response.status === 429) {
           console.log(`Rate limit alcanzado para ${telefono}`);
           
@@ -215,18 +211,19 @@ app.post('/webhook', async (req, res) => {
       }
       
     } else {
-      // (Esta parte no ha cambiado)
       const sesionUsuario = obtenerSesion(telefono);
       if (sesionUsuario && esTokenVigente(sesionUsuario.fecha_creacion)) {
         console.log('✅ Token vigente. Procesando comando...');
         await procesarComando(telefono, sesionUsuario.token, mensaje);
       
       } else {
+        // Esta es la sección que tenía el error de 'if-else'
         if (sesionUsuario) {
             console.log('❌ Token caducado.');
             borrarSesion(telefono);
-        }//ayuda
-        else console.log('No se encontró sesión.');
+        } else { 
+            console.log('No se encontró sesión.');
+        }
         
         await enviarMensaje(telefono, 'Hola, para continuar, por favor envía tu PIN de autenticación.\n\nEscribe *cancelar* para anular esta solicitud.');
         
@@ -248,4 +245,9 @@ app.post('/webhook', async (req, res) => {
   } else {
     res.status(200).send('Webhook recibido pero ignorado (sin datos o mensaje propio).');
   }
+});
+
+// --- INICIAR SERVIDOR ---
+app.listen(PORT, () => {
+  console.log(`Bot escuchando en http://localhost:${PORT}`);
 });
