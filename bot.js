@@ -272,7 +272,7 @@ app.post('/webhook', async (req, res) => {
 
     } else {
       const sesionUsuario = obtenerSesion(telefono);
-      if (sesionUsuario && esTokenVf.igente(sesionUsuario.fecha_creacion)) {
+      if (sesionUsuario && esTokenVigente(sesionUsuario.fecha_creacion)) {
         console.log('✅ Token vigente. Procesando comando...');
         await procesarComando(telefono, sesionUsuario.token, mensaje);
 
