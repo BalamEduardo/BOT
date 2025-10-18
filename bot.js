@@ -4,14 +4,15 @@ const COMANDOS_VALIDOS = ['!reiniciar'];
 const express = require('express');
 const Database = require('better-sqlite3');
 const axios = require('axios');
-//cambio
+
 // --- CONFIGURACIÓN ---
 const PORT = 3000;
 const EVO_API_URL = 'http://10.8.0.20:8080';
 const EVO_API_KEY = '429683C4C977415CAAFCCE10F7D57E11';
 const MALENA_API_URL = 'https://panel.malena.cloud/api/login-pin';
-const MALENA_REBOOT_API_URL = 'https://panel.malena.cloud/api/host/reboot'; 
+const MALENA_REBOOT_API_URL = 'https://panel.malena.cloud/api/host/reboot';
 const INSTANCE_NAME = 'BOT';
+const MINUTOS_PARA_EXPIRAR_ESTADO = 5;
 
 const app = express();
 app.use(express.json());
@@ -33,7 +34,8 @@ db.exec(crearTabla);
 console.log('Tabla de sesiones asegurada.');
 
 // --- FUNCIONES DEL BOT ---
-
+// (Estas funciones no cambiaron: obtenerSesion, esTokenVigente, guardarSesion, enviarMensaje, procesarComando)
+// ... (Tu código de funciones va aquí, no es necesario copiarlo de nuevo si no cambió) ...
 function obtenerSesion(telefono) {
   const query = db.prepare('SELECT * FROM sesiones WHERE telefono = ?');
   return query.get(telefono);
@@ -68,7 +70,6 @@ async function enviarMensaje(telefono, texto) {
   }
 }
 
-// --- NUEVO --- Función para procesar comandos
 async function procesarComando(telefono, token, mensaje) {
   const [comando, ...args] = mensaje.trim().split(/\s+/);
 
@@ -80,7 +81,6 @@ async function procesarComando(telefono, token, mensaje) {
         return;
       }
 
-      // --- CORRECCIÓN AQUÍ --- Se elimina el texto "(MODO DE PRUEBA)"
       await enviarMensaje(telefono, `⏳ Procesando orden de reinicio para *${host}*... Un momento.`);
 
       try {
@@ -102,12 +102,18 @@ async function procesarComando(telefono, token, mensaje) {
         }
       } catch (error) {
         console.error('Error al llamar a la API de Malena:', error.response ? error.response.data : error.message);
-        await enviarMensaje(telefono, '🔴 Hubo un error de comunicación al intentar reiniciar el equipo. Por favor, contacta a un administrador.');
+        // --- NUEVO --- Manejo de error específico si el token de sesión expiró
+        if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+            await enviarMensaje(telefono, '🔴 Tu sesión ha expirado. Por favor, envía cualquier mensaje para volver a autenticarte.');
+            // Borramos la sesión de la BD para forzar la re-autenticación
+            db.prepare('DELETE FROM sesiones WHERE telefono = ?').run(telefono);
+        } else {
+            await enviarMensaje(telefono, '🔴 Hubo un error de comunicación al intentar reiniciar el equipo. Por favor, contacta a un administrador.');
+        }
       }
       break;
 
     default:
-      // --- MEJORA AÑADIDA --- Sugerencia de comandos
       const { bestMatch } = stringSimilarity.findBestMatch(comando.toLowerCase(), COMANDOS_VALIDOS);
 
       if (bestMatch.rating > 0.7) {
@@ -130,7 +136,35 @@ app.post('/webhook', async (req, res) => {
     const mensaje = webhookData.message.conversation;
     console.log(`Mensaje recibido de: ${telefono}, Contenido: ${mensaje}`);
     
-    if (conversationState[telefono]?.estado === 'AWAITING_PIN') {
+    // --- NUEVO --- Lógica de expiración del estado AWAITING_PIN
+    let estadoUsuario = conversationState[telefono];
+    
+    if (estadoUsuario && estadoUsuario.estado === 'AWAITING_PIN') {
+      const ahora = Date.now();
+      const tiempoPasadoMs = ahora - estadoUsuario.timestamp;
+      const tiempoPasadoMin = tiempoPasadoMs / 60000; // Convertir a minutos
+
+      if (tiempoPasadoMin > MINUTOS_PARA_EXPIRAR_ESTADO) {
+        console.log(`Estado 'AWAITING_PIN' para ${telefono} ha expirado (pasaron ${tiempoPasadoMin.toFixed(2)} min).`);
+        delete conversationState[telefono];
+        estadoUsuario = null; // Limpiamos el estado local
+      }
+    }
+    // --- FIN DEL BLOQUE DE EXPIRACIÓN ---
+
+
+    // --- MODIFICADO --- Usamos la variable local 'estadoUsuario' que ya fue validada
+    if (estadoUsuario?.estado === 'AWAITING_PIN') {
+      
+      // --- NUEVO --- Manejo del comando "cancelar"
+      if (mensaje.toLowerCase() === 'cancelar') {
+        console.log(`Usuario ${telefono} canceló la solicitud de PIN.`);
+        delete conversationState[telefono];
+        await enviarMensaje(telefono, 'Solicitud cancelada. Puedes enviar un nuevo comando cuando quieras.');
+        
+        return res.status(200).send('Solicitud cancelada');
+      }
+      
       const pinRecibido = mensaje;
       console.log(`PIN recibido: ${pinRecibido}. Validando...`);
       
@@ -140,24 +174,41 @@ app.post('/webhook', async (req, res) => {
         guardarSesion(telefono, nuevoToken);
         await enviarMensaje(telefono, '✅ ¡Autenticación exitosa! Tu sesión durará 24 horas. Ahora puedes enviar tu comando.');
         delete conversationState[telefono]; 
+      
       } catch (error) {
         console.error('Error al validar el PIN:', error.response?.data);
-        await enviarMensaje(telefono, '❌ PIN incorrecto. Por favor, inténtalo de nuevo.');
+        
+        // --- NUEVO --- Manejo del error "Too Many Attempts" (Rate Limit)
+        // El código 429 es el estándar HTTP para "Too Many Requests"
+        if (error.response && error.response.status === 429) {
+          console.log(`Rate limit alcanzado para ${telefono}`);
+          await enviarMensaje(telefono, '⚠️ Has realizado demasiados intentos fallidos. Por favor, inténtalo de nuevo en 5 minutos.');
+          // Borramos el estado para que no siga intentando y vuelva al flujo normal
+          delete conversationState[telefono];
+        } else {
+          // --- MODIFICADO --- Mensaje de PIN incorrecto, recordando "cancelar"
+          await enviarMensaje(telefono, '❌ PIN incorrecto. Por favor, inténtalo de nuevo (o escribe *cancelar*).');
+        }
       }
       
     } else {
       const sesionUsuario = obtenerSesion(telefono);
       if (sesionUsuario && esTokenVigente(sesionUsuario.fecha_creacion)) {
         console.log('✅ Token vigente. Procesando comando...');
-        // --- MODIFICADO --- Llamamos a la nueva función en lugar de enviar un mensaje placeholder.
         await procesarComando(telefono, sesionUsuario.token, mensaje);
       
       } else {
         if (sesionUsuario) console.log('❌ Token caducado.');
         else console.log('No se encontró sesión.');
         
-        await enviarMensaje(telefono, 'Hola, para continuar, por favor envía tu PIN de autenticación.');
-        conversationState[telefono] = { estado: 'AWAITING_PIN' };
+        // --- MODIFICADO --- Mensaje de solicitud de PIN actualizado
+        await enviarMensaje(telefono, 'Hola, para continuar, por favor envía tu PIN de autenticación.\n\nEscribe *cancelar* para anular esta solicitud.');
+        
+        // --- MODIFICADO --- Guardamos el estado con timestamp
+        conversationState[telefono] = { 
+          estado: 'AWAITING_PIN',
+          timestamp: Date.now() // Guardamos la hora actual
+        };
       }
     }
   }
