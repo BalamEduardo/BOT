@@ -225,7 +225,7 @@ app.post('/webhook', async (req, res) => {
         if (sesionUsuario) {
             console.log('❌ Token caducado.');
             borrarSesion(telefono);
-        }
+        }//ayuda
         else console.log('No se encontró sesión.');
         
         await enviarMensaje(telefono, 'Hola, para continuar, por favor envía tu PIN de autenticación.\n\nEscribe *cancelar* para anular esta solicitud.');
