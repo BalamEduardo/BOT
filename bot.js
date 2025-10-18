@@ -155,10 +155,13 @@ app.post('/webhook', async (req, res) => {
     
     let estadoUsuario = conversationState[telefono];
 
-    // Chequeo de estado RATE_LIMITED
+    // --- MODIFICADO --- Chequeo de estado RATE_LIMITED
+    // Ahora responde al usuario en lugar de ignorarlo.
     if (estadoUsuario && estadoUsuario.estado === 'RATE_LIMITED') {
-        console.log(`Usuario ${telefono} está en rate-limit. Ignorando mensaje: "${mensaje}"`);
-        return; // No hacemos nada, el usuario está "castigado"
+        console.log(`Usuario ${telefono} está en rate-limit. Recordando espera de ${MINUTOS_BLOQUEO} min.`);
+        // Envía un recordatorio activo
+        await enviarMensaje(telefono, `Por favor, espere. Aún debe esperar ${MINUTOS_BLOQUEO} minutos para volver a intentarlo.`);
+        return; // Importante: no procesamos nada más.
     }
     
     // Lógica de procesamiento de mensaje
@@ -188,20 +191,18 @@ app.post('/webhook', async (req, res) => {
       } catch (error) {
         console.error('Error al validar el PIN:', error.response?.data);
         
-        // --- MODIFICADO --- Lógica del Rate Limit a 3 minutos
+        // Lógica del Rate Limit a 3 minutos
         if (error.response && error.response.status === 429) {
           console.log(`Rate limit alcanzado para ${telefono}`);
           
           clearTimeout(estadoUsuario.timeoutId);
           
-          // --- MODIFICADO --- Mensaje actualizado a 3 minutos
           await enviarMensaje(telefono, `⚠️ Has realizado demasiados intentos fallidos. Por favor, inténtalo de nuevo en ${MINUTOS_BLOQUEO} minutos.`);
 
-          // --- MODIFICADO --- Usamos el nuevo timeout de 3 minutos
           const timeoutBloqueoId = setTimeout(() => {
             console.log(`Fin del rate-limit para ${telefono}. Limpiando estado.`);
             delete conversationState[telefono];
-          }, MS_BLOQUEO); // <-- 3 minutos
+          }, MS_BLOQUEO); // 3 minutos
 
           conversationState[telefono] = {
             estado: 'RATE_LIMITED',
@@ -214,6 +215,7 @@ app.post('/webhook', async (req, res) => {
       }
       
     } else {
+      // (Esta parte no ha cambiado)
       const sesionUsuario = obtenerSesion(telefono);
       if (sesionUsuario && esTokenVigente(sesionUsuario.fecha_creacion)) {
         console.log('✅ Token vigente. Procesando comando...');
@@ -228,14 +230,13 @@ app.post('/webhook', async (req, res) => {
         
         await enviarMensaje(telefono, 'Hola, para continuar, por favor envía tu PIN de autenticación.\n\nEscribe *cancelar* para anular esta solicitud.');
         
-        // --- MODIFICADO --- Usamos el timeout de 5 minutos
         const timeoutId = setTimeout(async () => {
           if (conversationState[telefono] && conversationState[telefono].estado === 'AWAITING_PIN') {
             console.log(`Timeout: Expirando estado AWAITING_PIN para ${telefono}`);
             delete conversationState[telefono];
             await enviarMensaje(telefono, 'Tu solicitud de PIN ha expirado por inactividad. Vuelve a enviar tu comando si deseas continuar.');
           }
-        }, MS_INACTIVIDAD); // <-- 5 minutos
+        }, MS_INACTIVIDAD); // 5 minutos
 
         conversationState[telefono] = { 
           estado: 'AWAITING_PIN',
@@ -247,9 +248,4 @@ app.post('/webhook', async (req, res) => {
   } else {
     res.status(200).send('Webhook recibido pero ignorado (sin datos o mensaje propio).');
   }
-});
-
-// --- INICIAR SERVIDOR ---
-app.listen(PORT, () => {
-  console.log(`Bot escuchando en http://localhost:${PORT}`);
 });
