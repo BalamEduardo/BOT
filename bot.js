@@ -13,15 +13,18 @@ const MALENA_API_URL = 'https://panel.malena.cloud/api/login-pin';
 const MALENA_REBOOT_API_URL = 'https://panel.malena.cloud/api/host/reboot';
 const INSTANCE_NAME = 'BOT';
 
-// --- NUEVO --- Constantes de tiempo para el estado
-const MINUTOS_PARA_EXPIRAR_ESTADO = 5;
-const MS_PARA_EXPIRAR_ESTADO = MINUTOS_PARA_EXPIRAR_ESTADO * 60 * 1000; // 5 minutos en milisegundos
+// --- NUEVO --- Constantes de tiempo diferenciadas
+const MINUTOS_INACTIVIDAD = 5; // Para AWAITING_PIN
+const MINUTOS_BLOQUEO = 3;     // Para RATE_LIMITED (Demasiados Intentos)
+
+const MS_INACTIVIDAD = MINUTOS_INACTIVIDAD * 60 * 1000; // 5 minutos en ms
+const MS_BLOQUEO = MINUTOS_BLOQUEO * 60 * 1000;     // 3 minutos en ms
 
 const app = express();
 app.use(express.json());
 
 const conversationState = {};
-const db = new Database('sesiones.db'); // Recuerda, esto apunta a /opt/BOT/sesiones.db por tu config de docker run
+const db = new Database('sesiones.db');
 console.log('Conexión a la base de datos SQLite exitosa.');
 
 // --- INICIALIZACIÓN DE LA TABLA ---
@@ -37,7 +40,7 @@ db.exec(crearTabla);
 console.log('Tabla de sesiones asegurada.');
 
 // --- FUNCIONES DEL BOT ---
-
+// (Estas funciones no han cambiado: obtenerSesion, esTokenVigente, guardarSesion, borrarSesion, enviarMensaje, procesarComando)
 function obtenerSesion(telefono) {
   const query = db.prepare('SELECT * FROM sesiones WHERE telefono = ?');
   return query.get(telefono);
@@ -57,7 +60,6 @@ function guardarSesion(telefono, token) {
   query.run(telefono, token, ahora);
 }
 
-// --- NUEVO --- Función para borrar la sesión
 function borrarSesion(telefono) {
     console.log(`Borrando sesión para ${telefono}`);
     db.prepare('DELETE FROM sesiones WHERE telefono = ?').run(telefono);
@@ -78,7 +80,6 @@ async function enviarMensaje(telefono, texto) {
   }
 }
 
-// --- MODIFICADO --- Función para procesar comandos
 async function procesarComando(telefono, token, mensaje) {
   const [comando, ...args] = mensaje.trim().split(/\s+/);
 
@@ -113,14 +114,13 @@ async function procesarComando(telefono, token, mensaje) {
         console.error('Error al llamar a la API de Malena:', error.response ? error.response.data : error.message);
         if (error.response && (error.response.status === 401 || error.response.status === 403)) {
             await enviarMensaje(telefono, '🔴 Tu sesión ha expirado en el servidor. Por favor, envía `!salir` y vuelve a autenticarte.');
-            borrarSesion(telefono); // Borramos la sesión de la BD
+            borrarSesion(telefono);
         } else {
             await enviarMensaje(telefono, '🔴 Hubo un error de comunicación al intentar reiniciar el equipo. Por favor, contacta a un administrador.');
         }
       }
       break;
 
-    // --- NUEVO --- Comando secreto !salir
     case '!salir':
         console.log(`Cerrando sesión para ${telefono} por comando !salir.`);
         borrarSesion(telefono);
@@ -128,7 +128,6 @@ async function procesarComando(telefono, token, mensaje) {
         break;
 
     default:
-      // No incluimos !salir en la sugerencia para mantenerlo "secreto"
       const { bestMatch } = stringSimilarity.findBestMatch(comando.toLowerCase(), COMANDOS_VALIDOS);
 
       if (bestMatch.rating > 0.7) {
@@ -140,7 +139,7 @@ async function procesarComando(telefono, token, mensaje) {
   }
 }
 
-// --- ENDPOINT DEL WEBHOOK ---
+// --- ENDPOINT DEL WEBHOOK (CON CAMBIOS) ---
 
 app.post('/webhook', async (req, res) => {
   console.log('---------- ¡Webhook Recibido! ----------');
@@ -148,24 +147,25 @@ app.post('/webhook', async (req, res) => {
   
   if (webhookData && webhookData.key && webhookData.message && !webhookData.key.fromMe) {
     
-    // 1. Respondemos 200 OK inmediatamente a Evolution API
     res.status(200).send('Mensaje recibido');
     
-    // 2. El resto del código se sigue ejecutando
     let telefono = webhookData.key.remoteJid.split('@')[0];
     const mensaje = webhookData.message.conversation;
     console.log(`Mensaje recibido de: ${telefono}, Contenido: ${mensaje}`);
     
-    // --- ELIMINADO --- El bloque pasivo de expiración de estado se fue de aquí.
-    
     let estadoUsuario = conversationState[telefono];
 
-    // --- Lógica de procesamiento de mensaje ---
+    // Chequeo de estado RATE_LIMITED
+    if (estadoUsuario && estadoUsuario.estado === 'RATE_LIMITED') {
+        console.log(`Usuario ${telefono} está en rate-limit. Ignorando mensaje: "${mensaje}"`);
+        return; // No hacemos nada, el usuario está "castigado"
+    }
+    
+    // Lógica de procesamiento de mensaje
     if (estadoUsuario?.estado === 'AWAITING_PIN') {
       
       if (mensaje.toLowerCase() === 'cancelar') {
         console.log(`Usuario ${telefono} canceló la solicitud de PIN.`);
-        // --- NUEVO --- Limpiamos el timeout para que no envíe el msg de expiración
         clearTimeout(estadoUsuario.timeoutId);
         delete conversationState[telefono];
         await enviarMensaje(telefono, 'Solicitud cancelada. Puedes enviar un nuevo comando cuando quieras.');
@@ -179,7 +179,6 @@ app.post('/webhook', async (req, res) => {
         const response = await axios.post(MALENA_API_URL, { pin: pinRecibido });
         const nuevoToken = response.data.token;
         
-        // --- NUEVO --- Limpiamos el timeout antes de borrar el estado
         clearTimeout(estadoUsuario.timeoutId);
         delete conversationState[telefono]; 
         
@@ -189,14 +188,27 @@ app.post('/webhook', async (req, res) => {
       } catch (error) {
         console.error('Error al validar el PIN:', error.response?.data);
         
+        // --- MODIFICADO --- Lógica del Rate Limit a 3 minutos
         if (error.response && error.response.status === 429) {
           console.log(`Rate limit alcanzado para ${telefono}`);
-          // --- NUEVO --- Limpiamos el timeout también en el rate limit
+          
           clearTimeout(estadoUsuario.timeoutId);
-          delete conversationState[telefono];
-          await enviarMensaje(telefono, '⚠️ Has realizado demasiados intentos fallidos. Por favor, inténtalo de nuevo en 5 minutos.');
+          
+          // --- MODIFICADO --- Mensaje actualizado a 3 minutos
+          await enviarMensaje(telefono, `⚠️ Has realizado demasiados intentos fallidos. Por favor, inténtalo de nuevo en ${MINUTOS_BLOQUEO} minutos.`);
+
+          // --- MODIFICADO --- Usamos el nuevo timeout de 3 minutos
+          const timeoutBloqueoId = setTimeout(() => {
+            console.log(`Fin del rate-limit para ${telefono}. Limpiando estado.`);
+            delete conversationState[telefono];
+          }, MS_BLOQUEO); // <-- 3 minutos
+
+          conversationState[telefono] = {
+            estado: 'RATE_LIMITED',
+            timeoutId: timeoutBloqueoId
+          };
+
         } else {
-          // Si el PIN es incorrecto, no limpiamos el timeout, dejamos que siga corriendo.
           await enviarMensaje(telefono, '❌ PIN incorrecto. Por favor, inténtalo de nuevo (o escribe *cancelar*).');
         }
       }
@@ -210,28 +222,25 @@ app.post('/webhook', async (req, res) => {
       } else {
         if (sesionUsuario) {
             console.log('❌ Token caducado.');
-            borrarSesion(telefono); // Limpiamos la sesión caducada de la BD
+            borrarSesion(telefono);
         }
         else console.log('No se encontró sesión.');
         
-        // --- MODIFICADO --- Solicitud de PIN con timeout proactivo
         await enviarMensaje(telefono, 'Hola, para continuar, por favor envía tu PIN de autenticación.\n\nEscribe *cancelar* para anular esta solicitud.');
         
-        // --- NUEVO --- Creamos un timeout para expirar esta solicitud
+        // --- MODIFICADO --- Usamos el timeout de 5 minutos
         const timeoutId = setTimeout(async () => {
-          // Verificamos si el estado AWAITING_PIN todavía existe (por si acaso)
           if (conversationState[telefono] && conversationState[telefono].estado === 'AWAITING_PIN') {
             console.log(`Timeout: Expirando estado AWAITING_PIN para ${telefono}`);
             delete conversationState[telefono];
             await enviarMensaje(telefono, 'Tu solicitud de PIN ha expirado por inactividad. Vuelve a enviar tu comando si deseas continuar.');
           }
-        }, MS_PARA_EXPIRAR_ESTADO); // 5 minutos
+        }, MS_INACTIVIDAD); // <-- 5 minutos
 
-        // --- MODIFICADO --- Guardamos el estado con timestamp y el ID del timeout
         conversationState[telefono] = { 
           estado: 'AWAITING_PIN',
           timestamp: Date.now(),
-          timeoutId: timeoutId // Guardamos el ID para poder cancelarlo
+          timeoutId: timeoutId
         };
       }
     }
