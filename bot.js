@@ -279,7 +279,7 @@ app.post('/webhook', async (req, res) => {
         }, MS_INACTIVIDAD);
 
         conversationState[telefono] = {
-          estado: 'AWAITIAWAITING_PIN',
+          estado: 'AWAITING_PIN',
           timestamp: Date.now(),
           timeoutId
         };
