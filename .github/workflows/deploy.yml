@@ -30,5 +30,9 @@ jobs:
           docker stop bot-wa || true
           docker rm bot-wa || true
           
-          # Ejecuta el nuevo contenedor
-          docker run -d --restart always --name bot-wa -p 3000:3000 -v /opt/BOT/sesiones.db:/usr/src/app/sesiones.db whatsapp-bot
+          # Ejecuta el nuevo contenedor CON LAS CREDENCIALES DE IA
+          docker run -d --restart always --name bot-wa -p 3000:3000 \
+            -v /opt/BOT/sesiones.db:/usr/src/app/sesiones.db \
+            -v /opt/BOT/dialogflow-key.json:/usr/src/app/dialogflow-key.json \
+            -e GOOGLE_APPLICATION_CREDENTIALS=/usr/src/app/dialogflow-key.json \
+            whatsapp-bot
