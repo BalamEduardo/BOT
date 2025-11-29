@@ -3,6 +3,7 @@ const stringSimilarity = require('string-similarity');
 const express = require('express');
 const Database = require('better-sqlite3');
 const axios = require('axios');
+const { SessionsClient } = require('@google-cloud/dialogflow');
 
 // --- CONFIGURACIÓN ---
 const PORT = 3000;
@@ -12,6 +13,7 @@ const MALENA_API_URL = 'https://panel.malena.cloud/api/login-pin';
 const MALENA_REBOOT_API_URL = 'https://panel.malena.cloud/api/host/reboot';
 const INSTANCE_NAME = 'BOT';
 const COMANDOS_VALIDOS = ['!reiniciar'];
+const projectId = 'soportebot-bmgb'; // Asegúrate de que este ID sea correcto en tu JSON
 
 // --- Constantes de tiempo diferenciadas ---
 const MINUTOS_INACTIVIDAD = 5; // Para AWAITING_PIN
@@ -149,6 +151,7 @@ async function procesarComando(telefono, token, mensaje) {
       break;
 
     default:
+      // Si llegamos aquí desde la IA, significa que ya intentamos interpretar y falló, o es un comando directo.
       const { bestMatch } = stringSimilarity.findBestMatch(comando.toLowerCase(), COMANDOS_VALIDOS);
       if (bestMatch.rating > 0.7) {
         await enviarMensaje(telefono, `Comando no reconocido. ¿Quizás quisiste decir \`${bestMatch.target}\`?`);
@@ -156,6 +159,36 @@ async function procesarComando(telefono, token, mensaje) {
         await enviarMensaje(telefono, 'Comando no reconocido. Por ahora, solo puedes usar `!reiniciar <hostname>`.');
       }
       break;
+  }
+}
+
+async function detectarIntencion(mensaje, sessionId) {
+  try {
+    const sessionClient = new SessionsClient();
+    const sessionPath = sessionClient.projectAgentSessionPath(projectId, sessionId);
+
+    const request = {
+      session: sessionPath,
+      queryInput: {
+        text: {
+          text: mensaje,
+          languageCode: 'es', 
+        },
+      },
+    };
+
+    const responses = await sessionClient.detectIntent(request);
+    const result = responses[0].queryResult;
+
+    return {
+      intent: result.intent ? result.intent.displayName : 'Default Fallback Intent',
+      parameters: result.parameters ? result.parameters.fields : {},
+      fulfillmentText: result.fulfillmentText || 'No estoy seguro de qué hacer con eso.'
+    };
+
+  } catch (error) {
+    console.error('ERROR AL LLAMAR A DIALOGFLOW:', error.message);
+    return { intent: 'ERROR_DIALOGFLOW', parameters: {} };
   }
 }
 
@@ -207,7 +240,7 @@ app.post('/webhook', async (req, res) => {
         clearTimeout(estadoUsuario.timeoutId);
         delete conversationState[telefono];
         guardarSesion(telefono, nuevoToken);
-        await enviarMensaje(telefono, '✅ ¡Autenticación exitosa! Tu sesión durará 24 horas. Ahora puedes enviar tu comando.');
+        await enviarMensaje(telefono, '✅ ¡Autenticación exitosa! Tu sesión durará 24 horas. ¿En qué te puedo ayudar hoy?');
       } catch (error) {
         console.error('Error al validar el PIN:', error.response?.data);
 
@@ -216,7 +249,6 @@ app.post('/webhook', async (req, res) => {
           clearTimeout(estadoUsuario.timeoutId);
           await enviarMensaje(telefono, `⚠️ Has realizado demasiados intentos fallidos. Por favor, inténtalo de nuevo en ${MINUTOS_BLOQUEO} minutos.`);
 
-          // Limpia cualquier timeout previo
           if (conversationState[telefono]?.timeoutId) {
             clearTimeout(conversationState[telefono].timeoutId);
           }
@@ -251,12 +283,47 @@ app.post('/webhook', async (req, res) => {
         }
       }
     } else {
-      // TOKEN
+      // --- LOGICA PRINCIPAL (TOKEN) ---
       const sesionUsuario = obtenerSesion(telefono);
+      
       if (sesionUsuario && esTokenVigente(sesionUsuario.fecha_creacion)) {
-        console.log('✅ Token vigente. Procesando comando...');
-        await procesarComando(telefono, sesionUsuario.token, mensaje);
+        console.log('✅ Token vigente. Consultando a la IA...');
+        
+        // --- 1. CONSULTAR INTELIGENCIA ARTIFICIAL (DIALOGFLOW) ---
+        const resultadoIA = await detectarIntencion(mensaje, telefono);
+        const intencion = resultadoIA.intent;
+        console.log(`🧠 Intención detectada: ${intencion}`);
+
+        // --- 2. EJECUTAR ACCIONES BASADAS EN LA INTENCIÓN ---
+        if (intencion === 'reiniciar_equipo') {
+            // Nota: Debes crear el parámetro 'hostname' en Dialogflow
+            const host = resultadoIA.parameters.hostname ? resultadoIA.parameters.hostname.stringValue : null;
+            
+            if (host) {
+                await procesarComando(telefono, sesionUsuario.token, `!reiniciar ${host}`);
+            } else {
+                await enviarMensaje(telefono, 'Entiendo que quieres reiniciar un equipo, pero no capté cuál. ¿Podrías repetir el nombre del host?');
+            }
+
+        } else if (intencion === 'salir_sesion') {
+            await procesarComando(telefono, sesionUsuario.token, `!salir`);
+
+        } else if (intencion === 'Default Fallback Intent') {
+             // Si la IA no entendió, intentamos procesarlo como comando clásico por si acaso
+             // o enviamos la respuesta por defecto de Dialogflow
+             if (mensaje.startsWith('!')) {
+                 await procesarComando(telefono, sesionUsuario.token, mensaje);
+             } else {
+                 await enviarMensaje(telefono, resultadoIA.fulfillmentText);
+             }
+             
+        } else {
+            // Si es una intención de charla (hola, gracias, etc), enviamos lo que diga Dialogflow
+            await enviarMensaje(telefono, resultadoIA.fulfillmentText);
+        }
+
       } else {
+        // --- NO HAY SESIÓN O EXPIRÓ ---
         if (sesionUsuario) {
           console.log('❌ Token caducado.');
           borrarSesion(telefono);
